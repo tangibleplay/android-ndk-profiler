@@ -65,6 +65,19 @@
 
 #define DEFAULT_GMON_OUT "/sdcard/gmon.out"
 
+#ifdef TARGET_ARM64
+typedef struct {
+	unsigned short *froms;
+	struct tostruct *tos;
+	int tolimit;
+} callgraph_t;
+
+typedef struct {
+	unsigned long low_pc;
+	unsigned long high_pc;
+	unsigned long text_size;
+} process_t;
+#else
 typedef struct {
 	unsigned short *froms;
 	struct tostruct *tos;
@@ -76,6 +89,7 @@ typedef struct {
 	size_t high_pc;
 	size_t text_size;
 } process_t;
+#endif
 
 typedef struct {
 	uint32_t nb_bins;
@@ -91,6 +105,18 @@ int opt_is_shared_lib = 0;
 static void systemMessage(int a, const char *msg)
 {
 	LOGI("%d: %s", a, msg);
+}
+
+static void profPut64(char *b, uint64_t v)
+{
+  b[0] = v & 255;
+  b[1] = (v >> 8) & 255;
+  b[2] = (v >> 16) & 255;
+  b[3] = (v >> 24) & 255;
+  b[4] = (v >> 32) & 255;
+  b[5] = (v >> 40) & 255;
+  b[6] = (v >> 48) & 255;
+  b[7] = (v >> 56) & 255;
 }
 
 static void profPut32(char *b, uint32_t v)
@@ -113,6 +139,16 @@ static int profWrite8(FILE *f, uint8_t b)
 		return 1;
 	}
 	return 0;
+}
+
+static int profWrite64(FILE *f, uint64_t v)
+{
+  char buf[8];
+
+  profPut64(buf, v);
+  if(fwrite(buf, 1, 8, f) != 8)
+    return 1;
+  return 0;
 }
 
 static int profWrite32(FILE *f, uint32_t v)
@@ -148,8 +184,18 @@ static int get_max_samples_per_sec()
 static void histogram_bin_incr(int sig, siginfo_t *info, void *context)
 {
 	ucontext_t *ucontext = (ucontext_t *) context;
+#ifdef TARGET_ARM
 	struct sigcontext *mcontext = &ucontext->uc_mcontext;
 	uint32_t frompcindex = mcontext->arm_pc;
+#endif
+#ifdef TARGET_ARM64
+	struct sigcontext *mcontext = &ucontext->uc_mcontext;
+	uint32_t frompcindex = mcontext->pc;
+#endif
+#ifdef TARGET_X86
+	mcontext_t *mcontext = &ucontext->uc_mcontext;
+	uint32_t frompcindex = mcontext->gregs[REG_EIP];
+#endif
 
 	uint16_t *b = (uint16_t *) hist.bins;
 
@@ -342,7 +388,11 @@ void moncleanup(void)
 	FILE *fd;
 	int fromindex;
 	int endfrom;
+#ifdef TARGET_ARM64
+	long frompc;
+#else
 	uint32_t frompc;
+#endif
 	int toindex;
 	struct gmon_hdr ghdr;
 	const char *gmon_name = get_gmon_out();
@@ -367,8 +417,13 @@ void moncleanup(void)
 	}
 
 	if (profWrite8(fd, GMON_TAG_TIME_HIST)
+#ifdef TARGET_ARM64
+	    || profWrite64(fd, get_real_address64(s_maps, (uint64_t) process.low_pc))
+	    || profWrite64(fd, get_real_address64(s_maps, (uint64_t) process.high_pc))
+#else
 	    || profWrite32(fd, get_real_address(s_maps, (uint32_t) process.low_pc))
 	    || profWrite32(fd, get_real_address(s_maps, (uint32_t) process.high_pc))
+#endif	  
 	    || profWrite32(fd, hist.nb_bins)
 	    || profWrite32(fd, sample_freq)
 	    || profWrite(fd, "seconds", 15)
@@ -397,16 +452,29 @@ void moncleanup(void)
 		}
 		frompc =
 			process.low_pc + (fromindex * HASHFRACTION * sizeof(*cg.froms));
+#ifdef TARGET_ARM64				
+		frompc = get_real_address64(s_maps, frompc);
+#else
 		frompc = get_real_address(s_maps, frompc);
+#endif		
 		for (toindex = cg.froms[fromindex]; toindex != 0;
 		     toindex = cg.tos[toindex].link) {
 			if (profWrite8(fd, GMON_TAG_CG_ARC)
+#ifdef TARGET_ARM64				
+				|| profWrite64(fd, (uint64_t) frompc)
+				|| profWrite64(fd,
+					   get_real_address64(s_maps,
+							    (uint64_t)
+							    cg.tos[toindex].
+							    selfpc))
+#else
 			    || profWrite32(fd, (uint32_t) frompc)
 			    || profWrite32(fd,
 					   get_real_address(s_maps,
 							    (uint32_t)
 							    cg.tos[toindex].
 							    selfpc))
+#endif			    
 			    || profWrite32(fd, cg.tos[toindex].count)) {
 				systemMessage(0, "ERROR writing mcount: arc");
 				fclose(fd);

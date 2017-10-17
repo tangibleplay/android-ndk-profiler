@@ -12,6 +12,10 @@
 #include <stdlib.h>
 #include "read_maps.h"
 
+#ifdef TARGET_ARM64
+#include <inttypes.h>
+#endif
+
 #ifdef ANDROID
 #include <android/log.h>    /* for __android_log_print, ANDROID_LOG_INFO, etc */
 #define LOGI(...)  __android_log_print(ANDROID_LOG_INFO, "PROFILING", __VA_ARGS__)
@@ -49,7 +53,11 @@ struct proc_map *read_maps(FILE *fp, const char *lname)
 			char c[1];
 			char perm[4];
 			int lo, base, hi;
+#ifdef TARGET_ARM64
+			sscanf(s_line, "%" SCNx64 "-%" SCNx64 " %4c %x %c", &lo, &hi, perm, &base, c);
+#else			
 			sscanf(s_line, "%x-%x %4c %x %c", &lo, &hi, perm, &base, c);
+#endif			
 
 			if (results == NULL) {
 				current = malloc(sizeof(struct proc_map));
@@ -81,6 +89,22 @@ struct proc_map *read_maps(FILE *fp, const char *lname)
 
 unsigned int get_real_address(const struct proc_map *maps,
 			      unsigned int fake)
+{
+	const struct proc_map *mp = maps;
+	while (mp) {
+		if (fake >= mp->lo && fake <= mp->hi) {
+			if (opt_is_shared_lib) {
+				return fake - mp->lo;
+			}
+			return fake;
+		}
+		mp = mp->next;
+	}
+	return fake;
+}
+
+unsigned long get_real_address64(const struct proc_map *maps,
+			      unsigned long fake)
 {
 	const struct proc_map *mp = maps;
 	while (mp) {

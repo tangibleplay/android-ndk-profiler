@@ -10,15 +10,25 @@
 #ifndef read_maps_h_seen
 #define read_maps_h_seen
 
+#ifdef TARGET_ARM64
 struct proc_map {
 	unsigned int base;
 	unsigned int lo;
 	unsigned int hi;
 	struct proc_map *next;
 };
+#else
+struct proc_map {
+	unsigned long base;
+	unsigned long lo;
+	unsigned long hi;
+	struct proc_map *next;
+};
+#endif
 
 struct proc_map *read_maps(FILE *fp, const char *lname);
 void free_maps(struct proc_map *s);
 unsigned int get_real_address(const struct proc_map *maps, unsigned int fake);
+unsigned long get_real_address64(const struct proc_map *maps, unsigned long fake);
 
 #endif
